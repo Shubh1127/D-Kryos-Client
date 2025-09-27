@@ -1,0 +1,16 @@
+rules_version = '2';
+
+// Firebase Storage security rules
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Users can read and write their own files
+    match /users/{userId}/{allPaths=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Allow authenticated users to read and write to their media folder
+    match /users/{userId}/media/{fileName} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}

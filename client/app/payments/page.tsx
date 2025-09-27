@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { DashboardLayout } from "@/components/layout/dashboard-layout"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -21,16 +21,73 @@ interface PaymentData {
   currency: string
 }
 
+interface Transaction {
+  id: string
+  amount: number
+  currency: string
+  receiver: string
+  description: string
+  status: string
+  razorpay_payment_id?: string
+  razorpay_order_id?: string
+  created_at: Date
+  signature_verified?: boolean
+}
+
+declare global {
+  interface Window {
+    Razorpay: any
+  }
+}
+
 export default function PaymentsPage() {
   const { user } = useAuth()
   const { toast } = useToast()
   const [isProcessing, setIsProcessing] = useState(false)
+  const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [loading, setLoading] = useState(true)
   const [paymentData, setPaymentData] = useState<PaymentData>({
     amount: 0,
     receiver: "",
     description: "",
     currency: "INR",
   })
+
+  // Load Razorpay script
+  useEffect(() => {
+    const script = document.createElement('script')
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js'
+    script.async = true
+    document.body.appendChild(script)
+    
+    return () => {
+      document.body.removeChild(script)
+    }
+  }, [])
+
+  // Fetch transaction history
+  useEffect(() => {
+    const fetchTransactions = async () => {
+      if (!user) {
+        setLoading(false)
+        return
+      }
+
+      try {
+        const response = await fetch(`/api/payments/transactions?userId=${user.id}`)
+        if (response.ok) {
+          const data = await response.json()
+          setTransactions(data.transactions || [])
+        }
+      } catch (error) {
+        console.error('Error fetching transactions:', error)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchTransactions()
+  }, [user])
 
   const MAX_PAYMENT_AMOUNT = 1000000 // ₹10,00,000
   const isAdmin = user?.role === "admin"
@@ -49,67 +106,125 @@ export default function PaymentsPage() {
         throw new Error("Please enter receiver details")
       }
 
+      if (!user) {
+        throw new Error("Please login to make payments")
+      }
+
       // Check payment limits for non-admin users
       if (!isAdmin && paymentData.amount > MAX_PAYMENT_AMOUNT) {
         throw new Error(`Payment amount cannot exceed ₹${MAX_PAYMENT_AMOUNT.toLocaleString()} for regular users`)
       }
 
-      // Mock Razorpay integration
-      const options = {
-        key: "rzp_test_1234567890", // Mock test key
-        amount: paymentData.amount * 100, // Razorpay expects amount in paise
-        currency: paymentData.currency,
-        name: "Kryos Demo",
-        description: paymentData.description || "Payment via Kryos",
-        handler: (response: any) => {
-          // Mock successful payment
-          const transactionId = `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-
-          // Save transaction to localStorage (in real app, this would go to backend)
-          const transaction = {
-            id: transactionId,
-            amount: paymentData.amount,
+      // Create Razorpay order
+      const orderResponse = await fetch('/api/payments/create-order', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          amount: paymentData.amount,
+          currency: paymentData.currency,
+          receipt: `rcpt_${Date.now()}`,
+          notes: {
             receiver: paymentData.receiver,
             description: paymentData.description,
-            currency: paymentData.currency,
-            status: isAdmin ? "approved" : "pending",
-            timestamp: new Date().toISOString(),
-            userId: user?.id,
-            razorpayPaymentId: response.razorpay_payment_id,
-            needsApproval: !isAdmin,
-          }
+            userId: user.id,
+          },
+        }),
+      })
 
-          const existingTransactions = JSON.parse(localStorage.getItem("kryos_transactions") || "[]")
-          localStorage.setItem("kryos_transactions", JSON.stringify([transaction, ...existingTransactions]))
-
-          toast({
-            title: "Payment Initiated",
-            description: isAdmin ? "Payment processed successfully!" : "Payment submitted for admin approval.",
-          })
-
-          // Reset form
-          setPaymentData({
-            amount: 0,
-            receiver: "",
-            description: "",
-            currency: "INR",
-          })
-        },
-        prefill: {
-          name: user?.name,
-          email: user?.email,
-        },
-        theme: {
-          color: "#8B5CF6", // Purple accent color
-        },
+      if (!orderResponse.ok) {
+        const error = await orderResponse.json()
+        throw new Error(error.error || 'Failed to create payment order')
       }
 
-      // Mock Razorpay checkout (in real app, this would load Razorpay SDK)
-      setTimeout(() => {
-        options.handler({ razorpay_payment_id: `pay_${Date.now()}` })
-        setIsProcessing(false)
-      }, 2000)
+      const orderData = await orderResponse.json()
+      console.log('Order created:', orderData)
+
+      // Razorpay checkout options
+      const options = {
+        key: orderData.key_id,
+        amount: orderData.order.amount,
+        currency: orderData.order.currency,
+        name: "Kryos Demo",
+        description: paymentData.description || "Payment via Kryos",
+        order_id: orderData.order.id,
+        handler: async (response: any) => {
+          try {
+            // Verify payment on server
+            const verifyResponse = await fetch('/api/payments/verify', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+                order_details: paymentData,
+                user_id: user.id,
+              }),
+            })
+
+            const verifyData = await verifyResponse.json()
+            
+            if (verifyData.success && verifyData.verified) {
+              toast({
+                title: "Payment Successful",
+                description: `Payment completed successfully! Transaction ID: ${verifyData.transaction_id}`,
+              })
+
+              // Reset form and refresh transactions
+              setPaymentData({
+                amount: 0,
+                receiver: "",
+                description: "",
+                currency: "INR",
+              })
+
+              // Refresh transaction history
+              const transactionsResponse = await fetch(`/api/payments/transactions?userId=${user.id}`)
+              if (transactionsResponse.ok) {
+                const transactionsData = await transactionsResponse.json()
+                setTransactions(transactionsData.transactions || [])
+              }
+              
+            } else {
+              throw new Error('Payment verification failed')
+            }
+          } catch (verifyError) {
+            console.error('Payment verification error:', verifyError)
+            toast({
+              title: "Payment Verification Failed",
+              description: "Payment may have been processed but verification failed. Please contact support.",
+              variant: "destructive",
+            })
+          }
+        },
+        prefill: {
+          name: user.name || '',
+          email: user.email || '',
+        },
+        theme: {
+          color: "#8B5CF6",
+        },
+        modal: {
+          ondismiss: () => {
+            setIsProcessing(false)
+          }
+        }
+      }
+
+      // Open Razorpay checkout
+      if (window.Razorpay) {
+        const rzp = new window.Razorpay(options)
+        rzp.open()
+      } else {
+        throw new Error('Razorpay SDK not loaded')
+      }
+
     } catch (error) {
+      console.error('Payment error:', error)
       toast({
         title: "Payment Failed",
         description: error instanceof Error ? error.message : "Failed to process payment",
@@ -306,6 +421,84 @@ export default function PaymentsPage() {
             </Card>
           </div>
         </div>
+
+        {/* Transaction History */}
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Clock className="h-5 w-5" />
+              Transaction History
+            </CardTitle>
+            <CardDescription>
+              View your recent payment transactions
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {loading ? (
+              <div className="space-y-4">
+                {[...Array(3)].map((_, i) => (
+                  <div key={i} className="flex items-center justify-between p-4 border rounded-lg">
+                    <div className="space-y-2 flex-1">
+                      <div className="h-4 bg-muted animate-pulse rounded w-1/3" />
+                      <div className="h-3 bg-muted animate-pulse rounded w-1/2" />
+                    </div>
+                    <div className="h-6 bg-muted animate-pulse rounded w-20" />
+                  </div>
+                ))}
+              </div>
+            ) : transactions.length === 0 ? (
+              <div className="text-center py-8">
+                <CreditCard className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-muted-foreground">No transactions yet</p>
+                <p className="text-sm text-muted-foreground">Your payment history will appear here</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {transactions.map((transaction) => (
+                  <div key={transaction.id} className="flex items-center justify-between p-4 border rounded-lg hover:bg-accent/5">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <p className="font-medium">{transaction.receiver}</p>
+                        <Badge 
+                          variant={
+                            transaction.status === 'completed' ? 'default' :
+                            transaction.status === 'failed' ? 'destructive' : 'secondary'
+                          }
+                        >
+                          {transaction.status}
+                        </Badge>
+                        {transaction.signature_verified && (
+                          <Badge variant="outline" className="text-green-600 border-green-600">
+                            Verified
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-sm text-muted-foreground">
+                        {transaction.description || 'No description'}
+                      </p>
+                      <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                        <span>
+                          {new Date(transaction.created_at).toLocaleDateString()} {new Date(transaction.created_at).toLocaleTimeString()}
+                        </span>
+                        {transaction.razorpay_payment_id && (
+                          <span>ID: {transaction.razorpay_payment_id}</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-bold text-lg">
+                        {formatCurrency(transaction.amount)}
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        {transaction.currency}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </DashboardLayout>
   )

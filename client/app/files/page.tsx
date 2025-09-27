@@ -2,7 +2,8 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { useAuth } from "@/contexts/auth-context"
 import { DashboardLayout } from "@/components/layout/dashboard-layout"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -20,46 +21,65 @@ interface FileItem {
   size: number
   uploadDate: string
   category: "image" | "video" | "document" | "music" | "other"
+  url: string
+  publicId: string
+  format?: string
+  width?: number
+  height?: number
 }
 
 export default function FilesPage() {
+  const { user } = useAuth()
   const { toast } = useToast()
   const [isUploading, setIsUploading] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState<string[]>([])
-  const [files, setFiles] = useState<FileItem[]>([
-    {
-      id: "1",
-      name: "presentation.pdf",
-      type: "application/pdf",
-      size: 2048000,
-      uploadDate: "2024-01-15",
-      category: "document",
-    },
-    {
-      id: "2",
-      name: "logo.png",
-      type: "image/png",
-      size: 512000,
-      uploadDate: "2024-01-14",
-      category: "image",
-    },
-    {
-      id: "3",
-      name: "demo-video.mp4",
-      type: "video/mp4",
-      size: 15728640,
-      uploadDate: "2024-01-13",
-      category: "video",
-    },
-    {
-      id: "4",
-      name: "background-music.mp3",
-      type: "audio/mp3",
-      size: 4194304,
-      uploadDate: "2024-01-12",
-      category: "music",
-    },
-  ])
+  const [files, setFiles] = useState<FileItem[]>([])
+  const [loading, setLoading] = useState(true)
+
+  // Fetch files from Cloudinary
+  useEffect(() => {
+    const fetchFiles = async () => {
+      if (!user) {
+        setLoading(false)
+        return
+      }
+
+      try {
+        const response = await fetch(`/api/media/list?userId=${user.id}`)
+        if (!response.ok) {
+          throw new Error('Failed to fetch files')
+        }
+
+        const data = await response.json()
+        const cloudinaryFiles: FileItem[] = data.files.map((file: any) => ({
+          id: file.publicId,
+          name: file.name,
+          type: file.type === 'image' ? 'image/jpeg' : file.type === 'video' ? 'video/mp4' : 'application/octet-stream',
+          size: file.size,
+          uploadDate: new Date(file.uploadedAt).toISOString().split('T')[0],
+          category: file.type === 'image' ? 'image' : file.type === 'video' ? 'video' : 'other',
+          url: file.url,
+          publicId: file.publicId,
+          format: file.format,
+          width: file.width,
+          height: file.height,
+        }))
+
+        setFiles(cloudinaryFiles)
+      } catch (error) {
+        console.error('Error fetching files:', error)
+        toast({
+          title: "Error",
+          description: "Failed to load files",
+          variant: "destructive",
+        })
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchFiles()
+  }, [user, toast])
 
   const formatFileSize = (bytes: number) => {
     if (bytes === 0) return "0 Bytes"
@@ -86,38 +106,59 @@ export default function FilesPage() {
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFiles = e.target.files
-    if (!uploadedFiles || uploadedFiles.length === 0) return
+    if (!uploadedFiles || uploadedFiles.length === 0 || !user) return
 
     setIsUploading(true)
 
     try {
-      // Mock upload process
-      await new Promise((resolve) => setTimeout(resolve, 2000))
+      const uploadPromises = Array.from(uploadedFiles).map(async (file) => {
+        const fileId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+        const formData = new FormData()
+        formData.append('file', file)
+        formData.append('fileName', file.name.replace(/[^a-zA-Z0-9.-]/g, '_'))
+        formData.append('fileId', fileId)
+        formData.append('userId', user.id)
 
-      const newFiles: FileItem[] = Array.from(uploadedFiles).map((file) => ({
-        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-        name: file.name,
-        type: file.type,
-        size: file.size,
-        uploadDate: new Date().toISOString().split("T")[0],
-        category: file.type.startsWith("image/")
-          ? "image"
-          : file.type.startsWith("video/")
-            ? "video"
-            : file.type.startsWith("audio/")
-              ? "music"
-              : file.type.includes("pdf") || file.type.includes("document")
-                ? "document"
-                : "other",
-      }))
+        const response = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData,
+        })
 
-      setFiles((prev) => [...newFiles, ...prev])
+        if (!response.ok) {
+          throw new Error(`Failed to upload ${file.name}`)
+        }
+
+        return await response.json()
+      })
+
+      await Promise.all(uploadPromises)
+
+      // Refresh the files list
+      const response = await fetch(`/api/media/list?userId=${user.id}`)
+      if (response.ok) {
+        const data = await response.json()
+        const cloudinaryFiles: FileItem[] = data.files.map((file: any) => ({
+          id: file.publicId,
+          name: file.name,
+          type: file.type === 'image' ? 'image/jpeg' : file.type === 'video' ? 'video/mp4' : 'application/octet-stream',
+          size: file.size,
+          uploadDate: new Date(file.uploadedAt).toISOString().split('T')[0],
+          category: file.type === 'image' ? 'image' : file.type === 'video' ? 'video' : 'other',
+          url: file.url,
+          publicId: file.publicId,
+          format: file.format,
+          width: file.width,
+          height: file.height,
+        }))
+        setFiles(cloudinaryFiles)
+      }
 
       toast({
         title: "Upload Successful",
         description: `${uploadedFiles.length} file(s) uploaded successfully.`,
       })
     } catch (error) {
+      console.error('Upload error:', error)
       toast({
         title: "Upload Failed",
         description: "Failed to upload files. Please try again.",
@@ -142,7 +183,7 @@ export default function FilesPage() {
     }
   }
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     if (selectedFiles.length === 0) {
       toast({
         title: "No Files Selected",
@@ -161,23 +202,76 @@ export default function FilesPage() {
       return
     }
 
-    // Mock download
-    toast({
-      title: "Download Started",
-      description: `Downloading ${selectedFiles.length} file(s)...`,
-    })
+    try {
+      // Download each selected file
+      for (const fileId of selectedFiles) {
+        const file = files.find(f => f.id === fileId)
+        if (file) {
+          const response = await fetch(file.url)
+          const blob = await response.blob()
+          const url = window.URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = file.name
+          document.body.appendChild(a)
+          a.click()
+          window.URL.revokeObjectURL(url)
+          document.body.removeChild(a)
+        }
+      }
+
+      toast({
+        title: "Download Complete",
+        description: `Downloaded ${selectedFiles.length} file(s) successfully.`,
+      })
+    } catch (error) {
+      toast({
+        title: "Download Failed",
+        description: "Some files failed to download.",
+        variant: "destructive",
+      })
+    }
 
     setSelectedFiles([])
   }
 
-  const handleDelete = (fileId: string) => {
-    setFiles((prev) => prev.filter((file) => file.id !== fileId))
-    setSelectedFiles((prev) => prev.filter((id) => id !== fileId))
+  const handleDelete = async (fileId: string) => {
+    try {
+      const file = files.find(f => f.id === fileId)
+      if (!file) return
 
-    toast({
-      title: "File Deleted",
-      description: "File has been deleted successfully.",
-    })
+      // Delete from Cloudinary
+      const response = await fetch('/api/media/delete', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          publicId: file.publicId,
+          resourceType: file.category === 'image' ? 'image' : file.category === 'video' ? 'video' : 'image',
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to delete file')
+      }
+
+      // Update local state
+      setFiles((prev) => prev.filter((file) => file.id !== fileId))
+      setSelectedFiles((prev) => prev.filter((id) => id !== fileId))
+
+      toast({
+        title: "File Deleted",
+        description: "File has been deleted successfully.",
+      })
+    } catch (error) {
+      console.error('Delete error:', error)
+      toast({
+        title: "Delete Failed",
+        description: "Failed to delete file.",
+        variant: "destructive",
+      })
+    }
   }
 
   const stats = {
@@ -214,7 +308,13 @@ export default function FilesPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-muted-foreground">Total Files</p>
-                  <p className="text-2xl font-bold">{stats.totalFiles}</p>
+                  <p className="text-2xl font-bold">
+                    {loading ? (
+                      <div className="h-6 w-8 bg-muted animate-pulse rounded" />
+                    ) : (
+                      stats.totalFiles
+                    )}
+                  </p>
                 </div>
                 <File className="h-8 w-8 text-muted-foreground" />
               </div>
@@ -225,7 +325,13 @@ export default function FilesPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-muted-foreground">Total Size</p>
-                  <p className="text-2xl font-bold">{formatFileSize(stats.totalSize)}</p>
+                  <p className="text-2xl font-bold">
+                    {loading ? (
+                      <div className="h-6 w-16 bg-muted animate-pulse rounded" />
+                    ) : (
+                      formatFileSize(stats.totalSize)
+                    )}
+                  </p>
                 </div>
                 <Upload className="h-8 w-8 text-muted-foreground" />
               </div>
@@ -236,7 +342,13 @@ export default function FilesPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-muted-foreground">Images</p>
-                  <p className="text-2xl font-bold">{stats.images}</p>
+                  <p className="text-2xl font-bold">
+                    {loading ? (
+                      <div className="h-6 w-6 bg-muted animate-pulse rounded" />
+                    ) : (
+                      stats.images
+                    )}
+                  </p>
                 </div>
                 <ImageIcon className="h-8 w-8 text-blue-500" />
               </div>
@@ -247,7 +359,13 @@ export default function FilesPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-muted-foreground">Videos</p>
-                  <p className="text-2xl font-bold">{stats.videos}</p>
+                  <p className="text-2xl font-bold">
+                    {loading ? (
+                      <div className="h-6 w-6 bg-muted animate-pulse rounded" />
+                    ) : (
+                      stats.videos
+                    )}
+                  </p>
                 </div>
                 <Video className="h-8 w-8 text-purple-500" />
               </div>
@@ -258,7 +376,13 @@ export default function FilesPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-muted-foreground">Documents</p>
-                  <p className="text-2xl font-bold">{stats.documents}</p>
+                  <p className="text-2xl font-bold">
+                    {loading ? (
+                      <div className="h-6 w-6 bg-muted animate-pulse rounded" />
+                    ) : (
+                      stats.documents
+                    )}
+                  </p>
                 </div>
                 <FileText className="h-8 w-8 text-green-500" />
               </div>
@@ -317,7 +441,20 @@ export default function FilesPage() {
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
-              {files.length === 0 ? (
+              {loading ? (
+                <div className="space-y-2">
+                  {[...Array(3)].map((_, i) => (
+                    <div key={i} className="flex items-center gap-3 p-4 border border-border rounded-lg">
+                      <div className="h-4 w-4 bg-muted animate-pulse rounded" />
+                      <div className="h-6 w-6 bg-muted animate-pulse rounded" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-4 bg-muted animate-pulse rounded w-1/3" />
+                        <div className="h-3 bg-muted animate-pulse rounded w-1/2" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : files.length === 0 ? (
                 <div className="text-center py-8">
                   <File className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                   <p className="text-muted-foreground">No files uploaded yet</p>

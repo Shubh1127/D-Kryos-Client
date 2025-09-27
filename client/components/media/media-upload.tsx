@@ -6,10 +6,6 @@ import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { useToast } from "@/hooks/use-toast"
 import { Upload, X, File, Image, Video } from "lucide-react"
-import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage"
-import { doc, setDoc, collection } from "firebase/firestore"
-import { storage, db } from "@/firebase/firebaseConfig"
-
 interface UploadFile {
   file: File
   progress: number
@@ -18,7 +14,11 @@ interface UploadFile {
   id?: string
 }
 
-export function MediaUpload() {
+interface MediaUploadProps {
+  onUploadComplete?: () => void
+}
+
+export function MediaUpload({ onUploadComplete }: MediaUploadProps) {
   const { user } = useAuth()
   const { toast } = useToast()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -73,70 +73,69 @@ export function MediaUpload() {
     setUploadFiles(prev => [...prev, ...validFiles])
   }
   
-  const uploadFile = async (uploadFile: UploadFile, index: number) => {
-    if (!user) return
+  const uploadFile = async (uploadFileItem: UploadFile, index: number) => {
+    if (!user) {
+      toast({
+        title: "Authentication Required",
+        description: "Please make sure you're logged in before uploading files.",
+        variant: "destructive",
+      })
+      return
+    }
     
     const fileId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-    const fileName = `${fileId}-${uploadFile.file.name}`
-    const storageRef = ref(storage, `users/${user.id}/media/${fileName}`)
+    const cleanFileName = uploadFileItem.file.name.replace(/[^a-zA-Z0-9.-]/g, '_')
     
     setUploadFiles(prev => prev.map((f, i) => 
       i === index ? { ...f, status: 'uploading', id: fileId } : f
     ))
     
-    const uploadTask = uploadBytesResumable(storageRef, uploadFile.file)
-    
-    uploadTask.on('state_changed', 
-      (snapshot) => {
-        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100
-        setUploadFiles(prev => prev.map((f, i) => 
-          i === index ? { ...f, progress } : f
-        ))
-      },
-      (error) => {
-        console.error('Upload error:', error)
-        setUploadFiles(prev => prev.map((f, i) => 
-          i === index ? { ...f, status: 'error' } : f
-        ))
-        toast({
-          title: "Upload Failed",
-          description: `Failed to upload ${uploadFile.file.name}`,
-          variant: "destructive",
-        })
-      },
-      async () => {
-        try {
-          const downloadURL = await getDownloadURL(uploadTask.snapshot.ref)
-          
-          // Save metadata to Firestore
-          const mediaDoc = {
-            id: fileId,
-            name: uploadFile.file.name,
-            type: getFileType(uploadFile.file),
-            size: uploadFile.file.size,
-            url: downloadURL,
-            userId: user.id,
-            uploadedAt: new Date(),
-          }
-          
-          await setDoc(doc(collection(db, 'media'), fileId), mediaDoc)
-          
-          setUploadFiles(prev => prev.map((f, i) => 
-            i === index ? { ...f, status: 'completed', url: downloadURL } : f
-          ))
-          
-          toast({
-            title: "Upload Complete",
-            description: `${uploadFile.file.name} uploaded successfully`,
-          })
-        } catch (error) {
-          console.error('Metadata save error:', error)
-          setUploadFiles(prev => prev.map((f, i) => 
-            i === index ? { ...f, status: 'error' } : f
-          ))
-        }
+    try {
+      // Create FormData for the upload
+      const formData = new FormData()
+      formData.append('file', uploadFileItem.file)
+      formData.append('fileName', cleanFileName)
+      formData.append('fileId', fileId)
+      formData.append('userId', user.id)
+      
+      // Upload via our API route
+      const uploadResponse = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!uploadResponse.ok) {
+        const errorData = await uploadResponse.json()
+        throw new Error(errorData.error || 'Upload failed')
       }
-    )
+
+      const uploadResult = await uploadResponse.json()
+      
+      setUploadFiles(prev => prev.map((f, i) => 
+        i === index ? { ...f, status: 'completed', url: uploadResult.url, progress: 100 } : f
+      ))
+
+      toast({
+        title: "Upload Complete",
+        description: `${uploadFileItem.file.name} uploaded successfully`,
+      })
+      
+      // Trigger refresh callback
+      if (onUploadComplete) {
+        onUploadComplete()
+      }
+      
+    } catch (error: any) {
+      console.error('Upload initialization error:', error)
+      setUploadFiles(prev => prev.map((f, i) => 
+        i === index ? { ...f, status: 'error' } : f
+      ))
+      toast({
+        title: "Upload Failed",
+        description: `Failed to start upload: ${error.message}`,
+        variant: "destructive",
+      })
+    }
   }
   
   const startUploads = () => {

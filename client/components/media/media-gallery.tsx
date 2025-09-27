@@ -1,14 +1,13 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, forwardRef, useImperativeHandle } from "react"
 import { useAuth } from "@/contexts/auth-context"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { useToast } from "@/hooks/use-toast"
 import { Download, Trash2, Eye, Image, Video, Calendar, FileText } from "lucide-react"
-import { collection, query, where, orderBy, onSnapshot, deleteDoc, doc } from "firebase/firestore"
-import { ref, deleteObject, getDownloadURL } from "firebase/storage"
-import { db, storage } from "@/firebase/firebaseConfig"
+
+import { getOptimizedUrl, getVideoUrl } from "@/lib/cloudinary"
 import {
   Dialog,
   DialogContent,
@@ -34,11 +33,16 @@ interface MediaFile {
   type: 'image' | 'video'
   size: number
   url: string
+  publicId: string
+  cloudinaryId: string
   userId: string
   uploadedAt: any
+  format?: string
+  width?: number
+  height?: number
 }
 
-export function MediaGallery() {
+export const MediaGallery = forwardRef<{ refresh: () => void }>(function MediaGallery(props, ref) {
   const { user } = useAuth()
   const { toast } = useToast()
   
@@ -46,25 +50,45 @@ export function MediaGallery() {
   const [loading, setLoading] = useState(true)
   const [selectedFile, setSelectedFile] = useState<MediaFile | null>(null)
   
-  useEffect(() => {
-    if (!user) return
-    
-    const q = query(
-      collection(db, 'media'),
-      where('userId', '==', user.id),
-      orderBy('uploadedAt', 'desc')
-    )
-    
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const files: MediaFile[] = []
-      snapshot.forEach((doc) => {
-        files.push({ id: doc.id, ...doc.data() } as MediaFile)
-      })
-      setMediaFiles(files)
+  const fetchMediaFiles = async () => {
+    if (!user) {
       setLoading(false)
-    })
+      return
+    }
     
-    return () => unsubscribe()
+    try {
+      console.log('Fetching media files for user:', user.id)
+      setLoading(true)
+      
+      const response = await fetch(`/api/media/list?userId=${user.id}`)
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch media files')
+      }
+      
+      const data = await response.json()
+      console.log('Fetched media files:', data.files)
+      setMediaFiles(data.files || [])
+      
+    } catch (error) {
+      console.error('Error fetching media files:', error)
+      toast({
+        title: "Error",
+        description: "Failed to load media files",
+        variant: "destructive",
+      })
+      setMediaFiles([])
+    } finally {
+      setLoading(false)
+    }
+  }
+  
+  useImperativeHandle(ref, () => ({
+    refresh: fetchMediaFiles
+  }))
+  
+  useEffect(() => {
+    fetchMediaFiles()
   }, [user])
   
   const formatFileSize = (bytes: number) => {
@@ -110,16 +134,28 @@ export function MediaGallery() {
   
   const deleteFile = async (file: MediaFile) => {
     try {
-      // Delete from Storage
-      const fileRef = ref(storage, `users/${user?.id}/media/${file.id}-${file.name}`)
-      await deleteObject(fileRef)
+      // Delete from Cloudinary
+      if (file.publicId || file.cloudinaryId) {
+        const publicId = file.publicId || file.cloudinaryId
+        await fetch('/api/media/delete', {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            publicId,
+            resourceType: file.type,
+            userId: user?.id,
+          }),
+        })
+      }
       
-      // Delete from Firestore
-      await deleteDoc(doc(db, 'media', file.id))
+      // Refresh the media list after deletion
+      await fetchMediaFiles()
       
       toast({
         title: "File Deleted",
-        description: `${file.name} has been deleted.`,
+        description: `${file.name} has been deleted from Cloudinary.`,
       })
     } catch (error) {
       console.error('Delete error:', error)
@@ -277,4 +313,4 @@ export function MediaGallery() {
       </div>
     </div>
   )
-}
+})

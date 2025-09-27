@@ -1,5 +1,6 @@
 "use client"
 
+import { useState, useRef } from "react"
 import { DashboardLayout } from "@/components/layout/dashboard-layout"
 import { ProfileForm } from "@/components/profile/profile-form"
 import { MediaUpload } from "@/components/media/media-upload"
@@ -8,6 +9,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
 export default function ProfilePage() {
+  const [refreshTrigger, setRefreshTrigger] = useState(0)
+  const mediaGalleryRef = useRef<{ refresh: () => void }>(null)
+  
+  const handleUploadComplete = () => {
+    // Trigger gallery refresh
+    setRefreshTrigger(prev => prev + 1)
+    if (mediaGalleryRef.current) {
+      mediaGalleryRef.current.refresh()
+    }
+  }
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -48,13 +59,13 @@ export default function ProfilePage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <MediaUpload />
+                <MediaUpload onUploadComplete={handleUploadComplete} />
               </CardContent>
             </Card>
           </TabsContent>
 
           <TabsContent value="gallery" className="space-y-4">
-            <MediaGallery />
+            <MediaGallery ref={mediaGalleryRef} key={refreshTrigger} />
           </TabsContent>
         </Tabs>
       </div>

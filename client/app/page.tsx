@@ -9,22 +9,16 @@ import { ApiKeySetup } from "@/components/auth/api-key-setup"
 
 export default function HomePage() {
   const [isLogin, setIsLogin] = useState(true)
-  const { isAuthenticated, hasApiKey } = useAuth()
+  const { isAuthenticated } = useAuth()
   const router = useRouter()
 
   useEffect(() => {
-    if (isAuthenticated && hasApiKey) {
+    if (isAuthenticated) {
       router.push("/dashboard")
     }
-  }, [isAuthenticated, hasApiKey, router])
+  }, [isAuthenticated, router])
 
-  if (isAuthenticated && !hasApiKey) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background p-4">
-        <ApiKeySetup />
-      </div>
-    )
-  }
+  // Removed ApiKeySetup gating per new requirement
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-background p-4">

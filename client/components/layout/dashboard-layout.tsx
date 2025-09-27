@@ -12,18 +12,23 @@ interface DashboardLayoutProps {
 }
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
-  const { isAuthenticated, hasApiKey } = useAuth()
+  const { isAuthenticated, initializing } = useAuth()
   const router = useRouter()
 
   useEffect(() => {
-    if (!isAuthenticated || !hasApiKey) {
+    if (!initializing && !isAuthenticated) {
       router.push("/")
     }
-  }, [isAuthenticated, hasApiKey, router])
-
-  if (!isAuthenticated || !hasApiKey) {
-    return null
+  }, [isAuthenticated, initializing, router])
+  if (initializing) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-muted-foreground text-sm">
+        Loading dashboard...
+      </div>
+    )
   }
+
+  if (!isAuthenticated) return null
 
   return (
     <div className="min-h-screen bg-background">

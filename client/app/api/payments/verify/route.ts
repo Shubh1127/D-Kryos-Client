@@ -44,10 +44,11 @@ export async function POST(request: NextRequest) {
       amount: order_details.amount,
       currency: order_details.currency || 'INR',
       receiver: order_details.receiver,
-      description: order_details.description,
+      description: order_details.description || '',
       userId: user_id,
       status: isSignatureValid ? 'completed' : 'failed',
       signature_verified: isSignatureValid,
+      failure_reason: isSignatureValid ? null : 'Invalid payment signature',
       created_at: new Date(),
       updated_at: new Date(),
     }

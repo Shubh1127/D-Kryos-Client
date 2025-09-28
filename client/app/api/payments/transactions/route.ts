@@ -13,11 +13,10 @@ export async function GET(request: NextRequest) {
 
     console.log('Fetching transactions for user:', userId)
 
-    // Query transactions from Firestore
+    // Query transactions from Firestore (without orderBy to avoid index requirement)
     const q = query(
       collection(db, 'transactions'),
-      where('userId', '==', userId),
-      orderBy('created_at', 'desc')
+      where('userId', '==', userId)
     )
 
     const querySnapshot = await getDocs(q)
@@ -31,6 +30,13 @@ export async function GET(request: NextRequest) {
         created_at: data.created_at?.toDate?.() || data.created_at,
         updated_at: data.updated_at?.toDate?.() || data.updated_at,
       })
+    })
+
+    // Sort transactions by created_at in descending order (newest first)
+    transactions.sort((a, b) => {
+      const dateA = a.created_at instanceof Date ? a.created_at : new Date(a.created_at)
+      const dateB = b.created_at instanceof Date ? b.created_at : new Date(b.created_at)
+      return dateB.getTime() - dateA.getTime()
     })
 
     console.log('Found transactions:', transactions.length)

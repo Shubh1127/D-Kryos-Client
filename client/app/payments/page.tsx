@@ -208,8 +208,67 @@ export default function PaymentsPage() {
         theme: {
           color: "#8B5CF6",
         },
+        error: async (response: any) => {
+          // Handle payment errors
+          console.error('Payment error:', response)
+          
+          try {
+            await fetch('/api/payments/failed', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                razorpay_order_id: orderData.order.id,
+                order_details: paymentData,
+                user_id: user.id,
+                failure_reason: response.error?.description || 'Payment failed',
+              }),
+            })
+
+            // Refresh transaction history
+            const transactionsResponse = await fetch(`/api/payments/transactions?userId=${user.id}`)
+            if (transactionsResponse.ok) {
+              const transactionsData = await transactionsResponse.json()
+              setTransactions(transactionsData.transactions || [])
+            }
+          } catch (error) {
+            console.error('Error recording failed payment:', error)
+          }
+
+          toast({
+            title: "Payment Failed",
+            description: response.error?.description || "Payment could not be processed",
+            variant: "destructive",
+          })
+          setIsProcessing(false)
+        },
         modal: {
-          ondismiss: () => {
+          ondismiss: async () => {
+            // Record failed transaction when user closes modal
+            try {
+              await fetch('/api/payments/failed', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  razorpay_order_id: orderData.order.id,
+                  order_details: paymentData,
+                  user_id: user.id,
+                  failure_reason: 'Payment cancelled by user',
+                }),
+              })
+
+              // Refresh transaction history
+              const transactionsResponse = await fetch(`/api/payments/transactions?userId=${user.id}`)
+              if (transactionsResponse.ok) {
+                const transactionsData = await transactionsResponse.json()
+                setTransactions(transactionsData.transactions || [])
+              }
+            } catch (error) {
+              console.error('Error recording failed payment:', error)
+            }
             setIsProcessing(false)
           }
         }

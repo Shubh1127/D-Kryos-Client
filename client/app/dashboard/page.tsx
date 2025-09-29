@@ -110,7 +110,7 @@ export default function DashboardPage() {
 
         {/* Quick Actions */}
         <div>
-          <h2 className="text-2xl font-semibold mb-4">Quick Actions</h2>
+          <h2 className="text-2xl font-semibold mb-3">Quick Actions</h2>
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             {quickActions.map((action) => (
               <Card key={action.title} className="hover:bg-accent/5 transition-colors">
